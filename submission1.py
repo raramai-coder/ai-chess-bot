@@ -1,7 +1,5 @@
 import chess
 
-
-
 def representBoard(piecePlacementString):
     board = chess.Board(piecePlacementString)
     print(board)
