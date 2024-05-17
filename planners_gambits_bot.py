@@ -69,9 +69,53 @@ class MyAgent(Player):
             if piece is not None:
                 self.board.set_piece_at(square, piece)
 
+    def get_score_from_move_analysis(board, engine):
+        info = engine.analyse(board, chess.engine.Limit(depth=20))
+        return info["score"]
 
-    def choose_move(self, move_actions, seconds_left):
-        # Select a move to play using majority voting strategy
+    def generate_move_for_board(fenString,engine):
+    
+        board = chess.Board(fenString)
+        if board.is_checkmate():
+            move = list(board.legal_moves)[0]
+        else:
+            move = engine.play(board, chess.engine.Limit(time=0.1)).move
+    
+        return move
+    
+    def calculate_best_move(self,boards):
+     # PATH FOR TESTING
+    # engine = chess.engine.SimpleEngine.popen_uci('./stockfish', setpgrp=True)
+    # PATH FOR AUTOMARKER
+        engine = chess.engine.SimpleEngine.popen_uci('/opt/stockfish/stockfish', setpgrp=True)
+    
+        highestBoardScore = None
+        bestMove = ""
+
+        for board in boards:
+            move = self.generate_move_for_board(board, engine)
+            # move = chess.Move.from_uci(move)
+            possibleBoard = chess.Board(board)
+            possibleBoard.push(move)
+            boardScore = self.get_score_from_move_analysis(possibleBoard, engine)
+
+            if highestBoardScore is None:
+                highestBoardScore = boardScore.white()
+                bestMove = move.uci()
+            elif( boardScore.white() >highestBoardScore):
+                highestBoardScore =  boardScore.white()
+                bestMove = move.uci()
+            elif  boardScore.white() == highestBoardScore:
+             # take move with in alphabetical order
+                movesIncontention  = sorted([bestMove, move.uci()])
+                bestMove = movesIncontention[0]
+    
+            engine.quit()
+
+        return bestMove
+    
+    def majority_voting(self, move_actions ):
+         # Select a move to play using majority voting strategy
         if not self.possible_boards:
             return random.choice(move_actions)
     
@@ -95,6 +139,15 @@ class MyAgent(Player):
         else:
             best_move = random.choice(move_actions)
 
+        return best_move
+    
+    def choose_move(self, move_actions, seconds_left):
+       
+        # select move using majority voting
+        best_move = self.majority_voting(self,move_actions)
+
+        # select move using board analysis
+        # best_move = self.calculate_best_move(self,move_actions)
         return best_move
     
     def handle_move_result(self, requested_move, taken_move, captured_opponent_piece, capture_square):
