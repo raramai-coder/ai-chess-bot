@@ -33,12 +33,31 @@ class MyAgent(Player):
             self.board.remove_piece_at(capture_square)
         
 
+    def trout_bot_sense(self, sense_actions, move_actions, seconds_left):
+          #Trout Bot implementation
+         # if our piece was just captured, sense where it was captured
+        if self.my_piece_captured_square:
+            return self.my_piece_captured_square
+
+        # if we might capture a piece when we move, sense where the capture will occur
+        future_move = self.choose_move(move_actions, seconds_left)
+        if future_move is not None and self.board.piece_at(future_move.to_square) is not None:
+            return future_move.to_square
+
+        # otherwise, just randomly choose a sense action, but don't sense on a square where our pieces are located
+        for square, piece in self.board.piece_map().items():
+            if piece.color == self.color:
+                sense_actions.remove(square)
+        
+        return random.choice(sense_actions)
+    
     def choose_sense(self, sense_actions, move_actions, seconds_left):
-        # Select a sensing action uniformly at random (excluding edge squares).
+        # Get valid sense actions
         valid_sense_actions = [
             action for action in sense_actions if not self.is_edge_square(action)
         ]
-        return random.choice(valid_sense_actions)
+        choice = self.trout_bot_sense(self, valid_sense_actions, move_actions, seconds_left)
+        return choice
 
     def handle_sense_result(self, sense_result):
         # Narrow down list of possible moves
