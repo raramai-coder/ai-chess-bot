@@ -18,6 +18,7 @@ class MyAgent(Player):
         self.possible_boards = set()
         self.future_move = None
         self.future_move_board = None
+        self.central_squares = []
 
     def handle_game_start(self, color, board, opponent_name):
         # Handle initial game setup.
@@ -25,11 +26,16 @@ class MyAgent(Player):
         self.board = board
         self.opponent_name = opponent_name
 
+        # Set initial possible king position based on the agent's color
+        # self.possible_king_positions = {chess.E1 if color == chess.WHITE else chess.E8}  # This line
+
         # Initialize the starting state with the known initial board
         if board.turn == color:
             self.possible_boards = {board.fen()}  #if my turn, possible boards is just the starting board
+            self.central_squares = [chess.D5, chess.E5, chess.C5, chess.F5]
         else:
             self.possible_boards = self.generate_possible_board_for_all_possible_boards(boards= {board.fen()})   #if my opponents turn, possible boards is all boards after my opponent's possible moves
+            self.central_squares = [chess.D4, chess.E4, chess.C4, chess.F4]
 
     def handle_opponent_move_result(self, captured_my_piece, capture_square):
         # Update possible states based on opponent's capture result.
@@ -41,27 +47,51 @@ class MyAgent(Player):
         
 
     def trout_bot_sense(self, sense_actions, move_actions, seconds_left):
-          #Trout Bot implementation
+        #Trout Bot implementation
          # if our piece was just captured, sense where it was captured
         if self.my_piece_captured_square:
             return self.my_piece_captured_square
 
         # if we might capture a piece when we move, sense where the capture will occur
         future_move = self.calculate_best_move(move_actions, seconds_left=seconds_left)
+        # future_move = self.majority_voting(move_actions)
         self.future_move = future_move
         if future_move is not None and self.board.piece_at(future_move.to_square) is not None:
             self.future_move = future_move
             return future_move.to_square
         
-        if self.board.halfmove_clock <2:
-            return chess.parse_square('e3')
-
-        # otherwise, just randomly choose a sense action, but don't sense on a square where our pieces are located
-        for square, piece in self.board.piece_map().items():
-            if piece.color == self.color and square in sense_actions:
-                sense_actions.remove(square)
+        if self.board.fullmove_number <2:
+            square = random.choice(self.central_squares)
+            if square in sense_actions:
+                return square
+            
         
-        return random.choice(sense_actions)
+        # Assign weights to potential sense actions
+        square_weights = {square: 1.0 for square in sense_actions}
+        for square in sense_actions:
+            piece = self.board.piece_at(square)
+            if piece and piece.color == self.color:
+                square_weights[square] = 0.1  # Avoid sensing where our pieces are
+        print(square_weights)
+
+        # Increase weights for central and high-value squares
+        high_value_squares = [chess.E4, chess.D4, chess.E5, chess.D5, chess.F3, chess.F6, chess.C3, chess.C6]
+        for square in high_value_squares:
+            if square in square_weights:
+                square_weights[square] *= 2.0
+        print(f'high value squares:{square_weights}')
+
+        # Select the square with the maximum weight
+        chosen_square = max(square_weights, key=square_weights.get)
+        print(f'High value squares {chosen_square}') # debug print
+
+        return chosen_square
+        # otherwise, just randomly choose a sense action, but don't sense on a square where our pieces are located
+        # for square, piece in self.board.piece_map().items():
+        #     if piece.color == self.color and square in sense_actions:
+        #         sense_actions.remove(square)
+        
+        # return random.choice(sense_actions)
     
     def choose_sense(self, sense_actions, move_actions, seconds_left):
         # Get valid sense actions
@@ -74,15 +104,13 @@ class MyAgent(Player):
 
     def handle_sense_result(self, sense_result):
         new_possible_boards = set()
-        
-        # Narrow down list of possible moves
-        for square, _ in sense_result:
-            self.board.remove_piece_at(square)
 
         # Place the sensed pieces
         for square, piece in sense_result:
             if piece is not None:
                 self.board.set_piece_at(square, piece)
+            else:
+               self.board.remove_piece_at(square) 
         
         for boardFEN in self.possible_boards:
             board = chess.Board(boardFEN)
@@ -91,12 +119,19 @@ class MyAgent(Player):
                 if piece is not None and board.piece_at(square) is not None:
                     if piece.symbol() != board.piece_at(square).symbol():
                         valid = False
+                        break
                 elif piece is None and board.piece_at(square) is not None:
                     valid = False
+                    break
                 elif piece is not None and board.piece_at(square) is None:
                     valid = False
+                    break
             if valid:
                 new_possible_boards.add(boardFEN)
+
+        if len(new_possible_boards) == 0:
+            print("things have gone wrong")
+
 
         self.possible_boards = new_possible_boards
 
@@ -105,24 +140,6 @@ class MyAgent(Player):
 
         print("Num of possible boards after sensing: ", len(self.possible_boards))
 
-        # # sense_result is a list of tuples where each tuple contains a sqaure and a piece if any present on that square after the sensing action
-        # sensed_pieces = {square: piece for square, piece in sense_result} # dictionary that maps each sensed square to the piece found on the square. If the square is empty, the piece will be None
-        # # print((sensed_pieces)) # debug print
-        # new_possible_boards = set() # initialise  a new set that will store board states with the sense information
-        # # iterating over each board state the agent has considered so far
-        # for fen in self.possible_boards:
-        #     board = chess.Board(fen)
-        #     # print((board))
-        #     # iterates over all sensed squares and pieces. If the piece on a square in the current board matches the piece in the sensed_pieces. returns True if pieces match.
-        #     match = all(board.piece_at(square) == piece for square, piece in sensed_pieces.items())
-        #     print(match)
-        #     if match:
-        #     # The matched pieces can then be added to the new possible board set
-        #         new_possible_boards.add(board.fen())
-
-        # # the agent's set of possible board is updated to include only board states that have sensed information and discards the rest.
-        # self.possible_boards = new_possible_boards
-        # # print(self.possible_boards)
 
     def get_score_from_move_analysis(self,board):
         info = self.engine.analyse(board, chess.engine.Limit(depth=20))
@@ -137,7 +154,7 @@ class MyAgent(Player):
             # time_per_board = max(seconds_left / max(len(self.possible_boards), 1), 0.01)  # Safeguard against too low values
             # if time_per_board > 10:
             #     time_per_board = 0.1
-            time_per_board = max(5 / max(len(self.possible_boards), 1), 0.01)  # Safeguard against too low values
+            time_per_board = max(10 / max(len(self.possible_boards), 1), 0.01)  # Safeguard against too low values
             move = self.engine.play(board, chess.engine.Limit(time=time_per_board)).move
     
         return move
@@ -151,12 +168,17 @@ class MyAgent(Player):
         if not self.possible_boards:
             return random.choice(move_actions)
 
+        count = 0
         for board in self.possible_boards:
+            count +=1
+            if count > 20:
+                break
+
             possibleBoard = chess.Board(board)
             move = self.generate_move_for_board(possibleBoard, seconds_left)
 
-            if(seconds_left<10):
-                break
+            # if(seconds_left<10):
+            #     break
 
             if move in move_actions:
                 possibleBoard.push(move)
@@ -211,14 +233,17 @@ class MyAgent(Player):
     
     def choose_move(self, move_actions, seconds_left):
        
-        print("Num of possible boards before choosing move: ", len(self.possible_boards))
-        # select move using majority voting
-        # best_move = self.majority_voting(move_actions)
+        # print("Num of possible boards before choosing move: ", len(self.possible_boards))
 
         # TODO: find a better way to verify that the chosen best move is best move after sensing
         if self.future_move is not None and self.future_move in move_actions:   
             best_move = self.future_move
             return best_move
+
+        # select move using majority voting
+        # best_move = self.majority_voting(move_actions)
+
+       
         # select move using board analysis
         best_move = self.calculate_best_move(move_actions, seconds_left)
 
@@ -241,20 +266,26 @@ class MyAgent(Player):
             try:
                 # Make the requested move in this state to see the potential resulting position
                 new_board.push(requested_move)
-
-                # If the executed move is different from the requested move, rule out this board
-                if new_board.peek() != taken_move:
-                    continue
-
                 
-                # Check if the capture outcome matches
-                if captured_opponent_piece and current_board.is_capture(taken_move):
-                    new_possible_boards.add(new_board.fen())
-                    #TODO: track opponent capturesd peice and then sense it
-                elif not captured_opponent_piece and not current_board.is_capture(taken_move):
-                    new_possible_boards.add(new_board.fen())
+                if taken_move is None:
+                    if requested_move in current_board.pseudo_legal_moves:
+                        continue
+                    else:
+                       new_possible_boards.add(new_board.fen())
+                else: 
+                    # If the executed move is different from the requested move, rule out this board
+                    if new_board.peek() != taken_move:
+                        continue
+
+                    # Check if the capture outcome matches
+                    if captured_opponent_piece and current_board.is_capture(taken_move):
+                        new_possible_boards.add(new_board.fen())
+                        #TODO: track opponent capturesd peice and then sense it
+                    elif not captured_opponent_piece and not current_board.is_capture(taken_move):
+                        new_possible_boards.add(new_board.fen())
             except Exception as e:
                 # If an illegal move exception occurs, exclude this board
+                new_possible_boards.add(new_board.fen())
                 continue
 
         # Update to only keep the states that are consistent with the move outcome
@@ -287,8 +318,7 @@ class MyAgent(Player):
         new_possible_boards = set()
 
         for board in boards:
-            new_boards = self.generate_possible_boards_from_board(board)
-            # new_possible_boards.add(board)
+            new_boards = self.generate_possible_boards_from_board(board) 
             if new_boards:
                 new_possible_boards = new_possible_boards | new_boards
 
