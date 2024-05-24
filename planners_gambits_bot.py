@@ -66,7 +66,7 @@ class MyAgent(Player):
             self.possible_boards = expanded_new_possible_boards
         
         
-        print("Num of possible boards after enemy move: ", len(self.possible_boards))
+        # print("Num of possible boards after enemy move: ", len(self.possible_boards))
 
         self.board.push(chess.Move.null())
         
@@ -76,33 +76,33 @@ class MyAgent(Player):
         if self.my_piece_captured_square:
             square = self.my_piece_captured_square
             self.my_piece_captured_square = None
-            print("Sensing where I was just captured")
+            # print("Sensing where I was just captured")
             return square
         
         # if its tsill the early moves sense near most probable first move squares in center
         if self.board.fullmove_number <2:
             square = random.choice(self.central_squares)
             if square in sense_actions:
-                print("Sensing one of the central squares ")
+                # print("Sensing one of the central squares ")
                 return square
         
         # every third move sense where the opponent king could be
         if self.board.fullmove_number %3 ==0:
-            print("Sensing where opponent king might be located")
+            # print("Sensing where opponent king might be located")
             return self.try_find_opponent_king()
             
         # every fifth move sense where possible attackers of my king are guessed to be
         if self.board.fullmove_number %4 ==0:
             attacking_square = self.sense_my_king_attackers()
             if attacking_square is not None:
-                print("Sensing where my king might be under attack")
+                # print("Sensing where my king might be under attack")
                 return attacking_square
         
         #if we captured an opponent piece sense where we just captured
         if self.opponent_captured_square is not None:
             square = self.opponent_captured_square
             self.opponent_captured_square = None
-            print("Sensing where I just captured an opponent")
+            # print("Sensing where I just captured an opponent")
             return square
 
         # if we might capture a piece when we move, sense where the capture will occur
@@ -121,7 +121,7 @@ class MyAgent(Player):
         if predicted_move and isinstance(predicted_move, chess.Move):
             predicted_square = predicted_move.to_square
             if predicted_square in sense_actions:
-                print("Sensing from opponents future move")
+                # print("Sensing from opponents future move")
                 return predicted_square
         
         # Assign weights to potential sense actions
@@ -142,7 +142,7 @@ class MyAgent(Player):
         # Select the square with the maximum weight
         chosen_square = max(square_weights, key=square_weights.get)
         # print(f'High value squares {chosen_square}') # debug print
-        print("Sensing chosen_square,", chosen_square)
+        # print("Sensing chosen_square,", chosen_square)
 
         return chosen_square
     
@@ -171,7 +171,7 @@ class MyAgent(Player):
         if (self.board.attackers(square=king_position, color=color) is not None):
             attackers = self.board.attackers(square=king_position, color=color)
             if len(attackers) > 0:
-                return random.choice(attackers)
+                return random.choice(attackers.tolist())
         return None
 
     def handle_sense_result(self, sense_result):
@@ -221,15 +221,15 @@ class MyAgent(Player):
                 new_possible_boards.add(boardFEN)
 
         if len(new_possible_boards) == 0:
-            print("things have gone wrong")
-            print("Board FEN: ", self.board.fen())
-            # print("Possible FENs : ", self.possible_boards[:10])
-            print("Sense Result : ", sense_result)
+            # print("things have gone wrong")
+            # print("Board FEN: ", self.board.fen())
+            error = 1
+            # print("Sense Result : ", sense_result)
         else:
             self.possible_boards = new_possible_boards
 
         
-        print("Num of possible boards after sensing: ", len(self.possible_boards))
+        # print("Num of possible boards after sensing: ", len(self.possible_boards))
 
         # Calculate likelihood of sense_result for each possible board with weights
         for fen in self.possible_boards:
@@ -264,7 +264,7 @@ class MyAgent(Player):
         if self.future_move_board not in self.possible_boards:
             self.future_move = None
 
-        print("Num of possible boards after ruling out boards with low probability: ", len(self.possible_boards))
+        # print("Num of possible boards after ruling out boards with low probability: ", len(self.possible_boards))
 
     def get_square_weight(self, square, board):
         if square in [chess.E4, chess.D4, chess.E5, chess.D5]: 
@@ -380,7 +380,7 @@ class MyAgent(Player):
         try:
             info = self.engine.analyse(board, chess.engine.Limit(depth=20))
         except Exception as e:
-            print(e)
+            # print(e)
             return None
         return info["score"]
 
@@ -407,7 +407,7 @@ class MyAgent(Player):
 
         
         for board in self.possible_boards:
-            if(seconds_left<10):
+            if(seconds_left<100):
                 break
 
             possibleBoard = chess.Board(board)
@@ -517,7 +517,7 @@ class MyAgent(Player):
 
                     # Check if the capture outcome matches
                     if captured_opponent_piece:
-                        print("I did it I did it")
+                        # print("I did it I did it")
                         self.opponent_captured_square = capture_square
                     if captured_opponent_piece and current_board.is_capture(taken_move):
                         new_possible_boards.add(new_board.fen())
@@ -529,7 +529,8 @@ class MyAgent(Player):
 
         # Update to only keep the states that are consistent with the move outcome
         if len(new_possible_boards)==0:
-            print("something has gone worng after making a move bih")
+            # print("something has gone worng after making a move bih")
+            error = 1
         else:
             self.possible_boards = new_possible_boards
 
@@ -572,7 +573,7 @@ class MyAgent(Player):
     def generate_possible_board_for_all_possible_boards(self, boards):
         new_possible_boards = set()
         self.possible_king_positions = defaultdict(int)
-        print("generating new possible boards from ", len(boards))
+        # print("generating new possible boards from ", len(boards))
         for board in boards:
             new_boards = self.generate_possible_boards_from_board(board) 
             if new_boards:
