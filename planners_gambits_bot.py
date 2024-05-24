@@ -3,7 +3,7 @@ from reconchess import Player
 import chess
 import chess.engine
 import random
-from collections import Counter
+from collections import Counter, defaultdict
 
 
 #---------------------------Baseline Agent ---------------------------------------------------------------------------------------------------------#
@@ -19,6 +19,7 @@ class MyAgent(Player):
         self.future_move = None
         self.future_move_board = None
         self.central_squares = []
+        
 
     def handle_game_start(self, color, board, opponent_name):
         # Handle initial game setup.
@@ -27,7 +28,7 @@ class MyAgent(Player):
         self.opponent_name = opponent_name
 
         # Set initial possible king position based on the agent's color
-        # self.possible_king_positions = {chess.E1 if color == chess.WHITE else chess.E8}  # This line
+        self.possible_king_positions = {chess.E1 if color == chess.WHITE else chess.E8}  # This line
 
         # Initialize the starting state with the known initial board
         if board.turn == color:
@@ -72,14 +73,14 @@ class MyAgent(Player):
             piece = self.board.piece_at(square)
             if piece and piece.color == self.color:
                 square_weights[square] = 0.1  # Avoid sensing where our pieces are
-        print(square_weights)
+        # print(square_weights)
 
         # Increase weights for central and high-value squares
         high_value_squares = [chess.E4, chess.D4, chess.E5, chess.D5, chess.F3, chess.F6, chess.C3, chess.C6]
         for square in high_value_squares:
             if square in square_weights:
                 square_weights[square] *= 2.0
-        print(f'high value squares:{square_weights}')
+        # print(f'high value squares:{square_weights}')
 
         # Select the square with the maximum weight
         chosen_square = max(square_weights, key=square_weights.get)
@@ -103,9 +104,11 @@ class MyAgent(Player):
         return choice
 
     def handle_sense_result(self, sense_result):
+        sensed_pieces = {square: piece for square, piece in sense_result}
         new_possible_boards = set()
+        board_probabilities = defaultdict(float)
 
-        # Place the sensed pieces
+        # Place and remove pieces based on sense
         for square, piece in sense_result:
             if piece is not None:
                 self.board.set_piece_at(square, piece)
@@ -131,31 +134,140 @@ class MyAgent(Player):
 
         if len(new_possible_boards) == 0:
             print("things have gone wrong")
+            print("Board FEN: ", self.board.fen())
+            # print("Possible FENs : ", self.possible_boards[:10])
+            print("Sense Result : ", sense_result)
 
 
         self.possible_boards = new_possible_boards
+        print("Num of possible boards after sensing: ", len(self.possible_boards))
+
+        # Calculate likelihood of sense_result for each possible board with weights
+        for fen in self.possible_boards:
+            board = chess.Board(fen)
+            likelihood = 1.0
+            for square, piece in sensed_pieces.items():
+                weight = self.get_square_weight(square,board)
+                if board.piece_at(square) == piece:
+                    likelihood *= (0.9 * weight)  # Higher probability if the piece matches, scaled by weight
+                else:
+                    likelihood *= (0.1 * weight)  # Lower probability if the piece doesn't match, scaled by weight
+
+            # Update the probability of this board being the correct board
+            board_probabilities[fen] = likelihood
+
+        # Normalize probabilities
+        total_probability = sum(board_probabilities.values())
+        if total_probability > 0:
+            for fen in board_probabilities:
+                board_probabilities[fen] /= total_probability
+
+        new_possible_boards = set()
+        # Threshold to consider a board as a possible board
+        probability_threshold = 0.1
+        # probability_threshold = total_probability/len(board_probabilities)
+        for fen, probability in board_probabilities.items():
+            if probability > probability_threshold:
+                new_possible_boards.add(fen)
+
+        if len(new_possible_boards)>0:
+            self.possible_boards = new_possible_boards
 
         if self.future_move_board not in self.possible_boards:
             self.future_move = None
 
-        print("Num of possible boards after sensing: ", len(self.possible_boards))
+        print("Num of possible boards after ruling out boards with low probability: ", len(self.possible_boards))
 
+    def get_square_weight(self, square, board):
+        if square in [chess.E4, chess.D4, chess.E5, chess.D5]: #TODO: make it the center squares
+            return 1.5
+        # Weights for squares near potential king positions
+        for king_pos in self.possible_king_positions:
+            if square in self.SQUARES_around(king_pos):
+                return 1.2  # Higher weight for squares around potential king positions
+        
+        return 0.1
+    
+    def SQUARES_around(self, center):
+        offsets = [-9, -8, -7, -1, 1, 7, 8, 9]
+        return [center + offset for offset in offsets if self.is_valid_square(center + offset)]
+    
+    def is_valid_square(self, square):
+        return 0 <= square <= 63
+    
+    def update_possible_king_positions(self, last_sense_result):
+        updated_positions = set()
+        for pos in self.possible_king_positions:
+            for i in range(-1, 2):
+                for j in range(-1, 2):
+                    new_square = pos + i + 8 * j
+                    if self.is_valid_square(new_square):
+                        updated_positions.add(new_square)
+        self.possible_king_positions = updated_positions
 
+    def can_capture_lead_to_check(self, target_square, board): # consistently checking whether the board is a checkmate or can lead to the capture of the opponent's king
+        simulation_board = board.copy()
+        simulation_board.remove_piece_at(target_square)
+        for move in simulation_board.legal_moves:
+            simulation_board.push(move)
+            if simulation_board.is_check():
+                simulation_board.pop()
+                return True
+            simulation_board.pop()
+        return False
+    
+
+    def update_probabilities(self, move_history):
+        for move in move_history:
+            # Update board probabilities based on the move history
+            pass
+
+    def predict_opponent_moves(self, board, move_history):
+    # pattern recognition based on common strategies
+        if 'kingside_castle' in move_history:
+        # Opponent has castled kingside, might prepare for a kingside attack
+            if self.check_kingside_attack_setup(board):
+                return 'Prepare for kingside defense or counter in the center'
+
+    # Analyze the current position and predict the move based on common chess principles
+        current_position_features = self.analyze_position(board)
+        predicted_move = self.simple_move_predictor(current_position_features)
+        return predicted_move
+    
+    def check_kingside_attack_setup(self, board):
+    # Check for pieces positioning that commonly indicate a kingside attack
+        return board.piece_at(chess.F3) is not None  # Knight on F3 might indicate preparing for an attack
+    #TODO: add the alternative piece based on which color we are playing
+
+    def analyze_position(self, board):
+        # Analyze board and return some features
+        features = {}
+        features['material_advantage'] = self.calculate_material_advantage(board)
+        return features
+    
+    def simple_move_predictor(self, features):
+    # Predict move based on simple rules
+        if features['material_advantage'] > 0:
+            return 'Consolidate position'
+        else:
+            return 'Seek counterplay'
+
+    
     def get_score_from_move_analysis(self,board):
         info = self.engine.analyse(board, chess.engine.Limit(depth=20))
         return info["score"]
 
     def generate_move_for_board(self,board,seconds_left):
     
-        board.turn = self.color
+        # board.turn = self.color
         if board.is_checkmate():
             move = list(board.legal_moves)[0]
         else:
             # time_per_board = max(seconds_left / max(len(self.possible_boards), 1), 0.01)  # Safeguard against too low values
             # if time_per_board > 10:
             #     time_per_board = 0.1
-            time_per_board = max(10 / max(len(self.possible_boards), 1), 0.01)  # Safeguard against too low values
-            move = self.engine.play(board, chess.engine.Limit(time=time_per_board)).move
+            time_per_board = max(10 / max(len(self.possible_boards), 1), 0.5)  # Safeguard against too low values
+            move = self.engine.play(board, chess.engine.Limit(time=0.1)).move
     
         return move
     
@@ -171,7 +283,7 @@ class MyAgent(Player):
         count = 0
         for board in self.possible_boards:
             count +=1
-            if count > 20:
+            if count > 9:
                 break
 
             possibleBoard = chess.Board(board)
@@ -289,7 +401,9 @@ class MyAgent(Player):
                 continue
 
         # Update to only keep the states that are consistent with the move outcome
-       
+        if len(new_possible_boards)==0:
+            print("somethinghas gone worng after making a move bih")
+
         expanded_new_possible_boards = self.generate_possible_board_for_all_possible_boards(new_possible_boards)
         self.possible_boards = expanded_new_possible_boards
         print("Num of possible boards after making move: ", len(self.possible_boards))
