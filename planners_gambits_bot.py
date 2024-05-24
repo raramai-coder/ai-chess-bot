@@ -39,7 +39,7 @@ class MyAgent(Player):
             self.possible_king_positions = {chess.E8} 
             self.enemy_king_last_position = chess.E8
         else:
-            self.possible_boards = self.generate_possible_board_for_all_possible_boards(boards= {board.fen()})   #if my opponents turn, possible boards is all boards after my opponent's possible moves
+            self.possible_boards = {board.fen()}   #if my opponents turn, possible boards is all boards after my opponent's possible moves
             self.central_squares = [chess.D4, chess.E4, chess.C4, chess.F4]
             self.my_king_position = chess.E8
             self.possible_king_positions = {chess.E1} 
@@ -47,17 +47,31 @@ class MyAgent(Player):
 
     def handle_opponent_move_result(self, captured_my_piece, capture_square):
         # Update possible states based on opponent's capture result.
+        new_possible_baords = set()
         self.my_piece_captured_square = capture_square
         if captured_my_piece:
             self.board.remove_piece_at(capture_square)
+            for boardFEN in self.possible_boards:
+                board = chess.Board(boardFEN)
+                if board.piece_at(capture_square) is None or board.piece_at(capture_square).color != self.color:
+                    continue
+                else:
+                    new_possible_baords.add(boardFEN)
+            self.possible_boards = new_possible_baords
+            expanded_new_possible_boards = self.generate_possible_board_for_all_possible_boards(new_possible_baords)
+            self.possible_boards = expanded_new_possible_boards
+        if self.color == chess.WHITE and self.board.fullmove_number != 1:
+            self.not_first_turn = False
+            expanded_new_possible_boards = self.generate_possible_board_for_all_possible_boards(self.possible_boards)
+            self.possible_boards = expanded_new_possible_boards
         
+        
+        print("Num of possible boards after enemy move: ", len(self.possible_boards))
 
-
-        #TODO: for all possible boards remove the boards where opponent could not have captured my piece check for where my piece was under attack, and remove boards where i was not
+        self.board.push(chess.Move.null())
         
 
     def trout_bot_sense(self, sense_actions, move_actions, seconds_left):
-        
         # if our piece was just captured, sense where it was captured
         if self.my_piece_captured_square:
             square = self.my_piece_captured_square
@@ -78,7 +92,7 @@ class MyAgent(Player):
             return self.try_find_opponent_king()
             
         # every fifth move sense where possible attackers of my king are guessed to be
-        if self.board.fullmove_number %5 ==0:
+        if self.board.fullmove_number %4 ==0:
             attacking_square = self.sense_my_king_attackers()
             if attacking_square is not None:
                 print("Sensing where my king might be under attack")
@@ -98,6 +112,17 @@ class MyAgent(Player):
         if future_move is not None and self.board.piece_at(future_move.to_square) is not None:
             self.future_move = future_move
             return future_move.to_square
+        
+        # Predict opponent's next move
+        move_history = [move.uci() for move in self.board.move_stack]
+        predicted_move = self.predict_opponent_moves(self.board, move_history)
+
+        # Use predicted move to influence sensing
+        if predicted_move and isinstance(predicted_move, chess.Move):
+            predicted_square = predicted_move.to_square
+            if predicted_square in sense_actions:
+                print("Sensing from opponents future move")
+                return predicted_square
         
         # Assign weights to potential sense actions
         square_weights = {square: 1.0 for square in sense_actions}
@@ -126,24 +151,27 @@ class MyAgent(Player):
         valid_sense_actions = [
             action for action in sense_actions if not self.is_edge_square(action)
         ]
+
         choice = self.trout_bot_sense( sense_actions=valid_sense_actions, move_actions=move_actions, seconds_left=seconds_left)
-        # choice = random.choice(valid_sense_actions)
+
+        
         return choice
 
     def try_find_opponent_king(self):
         if self.enemy_king_last_position is not None:
             return self.enemy_king_last_position
         else:
-            if self.possible_king_positions >0:
+            if len(self.possible_king_positions) >0:
                 most_frequent_position = max(self.possible_king_positions,key=lambda key: self.possible_king_positions[key])
                 return most_frequent_position
             
     def sense_my_king_attackers(self):
         king_position = self.board.king(self.color)
         color = not self.color
-        attackers = self.board.attackers(square=king_position, color=color)
-        if len(attackers) > 0:
-            return random.choice(attackers)
+        if (self.board.attackers(square=king_position, color=color) is not None):
+            attackers = self.board.attackers(square=king_position, color=color)
+            if len(attackers) > 0:
+                return random.choice(attackers)
         return None
 
     def handle_sense_result(self, sense_result):
@@ -197,9 +225,10 @@ class MyAgent(Player):
             print("Board FEN: ", self.board.fen())
             # print("Possible FENs : ", self.possible_boards[:10])
             print("Sense Result : ", sense_result)
+        else:
+            self.possible_boards = new_possible_boards
 
-
-        self.possible_boards = new_possible_boards
+        
         print("Num of possible boards after sensing: ", len(self.possible_boards))
 
         # Calculate likelihood of sense_result for each possible board with weights
@@ -207,7 +236,7 @@ class MyAgent(Player):
             board = chess.Board(fen)
             likelihood = 1.0
             for square, piece in sensed_pieces.items():
-                weight = self.get_square_weight(square,board)
+                weight = self.get_square_weight(square, board)
                 if board.piece_at(square) == piece:
                     likelihood *= (0.9 * weight)  # Higher probability if the piece matches, scaled by weight
                 else:
@@ -216,22 +245,20 @@ class MyAgent(Player):
             # Update the probability of this board being the correct board
             board_probabilities[fen] = likelihood
 
-        # Normalize probabilities
+         # Normalize probabilities
         total_probability = sum(board_probabilities.values())
         if total_probability > 0:
             for fen in board_probabilities:
                 board_probabilities[fen] /= total_probability
-                # print(board_probabilities)
 
-        new_possible_boards = set()
-        # Threshold to consider a board as a possible board
-        probability_threshold = 0.2
-        # probability_threshold = total_probability/len(board_probabilities)
-        for fen, probability in board_probabilities.items():
-            if probability > probability_threshold:
-                new_possible_boards.add(fen)
+        # Use a different filtering approach by keeping a proportion of the boards with the highest probabilities
+        sorted_boards = sorted(board_probabilities.items(), key=lambda item: item[1], reverse=True)
+        threshold_index = int(0.5 * len(sorted_boards))  # Keep the top 50% of the boards by probability
 
-        if len(new_possible_boards)>0:
+        new_possible_boards = set(fen for fen, prob in sorted_boards[:threshold_index]) 
+
+
+        if len(new_possible_boards)>0 :
             self.possible_boards = new_possible_boards
 
         if self.future_move_board not in self.possible_boards:
@@ -283,35 +310,72 @@ class MyAgent(Player):
             pass
 
     def predict_opponent_moves(self, board, move_history):
-    # pattern recognition based on common strategies
+        # Pattern recognition based on common strategies
         if 'kingside_castle' in move_history:
-        # Opponent has castled kingside, might prepare for a kingside attack
             if self.check_kingside_attack_setup(board):
-                return 'Prepare for kingside defense or counter in the center'
+                # Return a valid UCI move for preparing for defense or countering
+                # return self.simple_move_predictor(board, self.analyze_position(board))
+                return chess.Move.from_uci('e1g1')
 
-    # Analyze the current position and predict the move based on common chess principles
+        # Analyze the current position and predict the move based on common chess principles
         current_position_features = self.analyze_position(board)
-        predicted_move = self.simple_move_predictor(current_position_features)
+        predicted_move_uci = self.simple_move_predictor(board, current_position_features)
+
+        # Convert the predicted move to a chess.Move object
+        predicted_move = chess.Move.from_uci(predicted_move_uci)
+
         return predicted_move
     
     def check_kingside_attack_setup(self, board):
     # Check for pieces positioning that commonly indicate a kingside attack
-        return board.piece_at(chess.F3) is not None  # Knight on F3 might indicate preparing for an attack
+        if self.color == chess.WHITE:
+            return board.piece_at(chess.F3) is not None  # Knight on F3 might indicate preparing for an attack
+        else:
+           return board.piece_at(chess.F6) is not None  # Knight on F3 might indicate preparing for an attack 
     #TODO: add the alternative piece based on which color we are playing
 
     def analyze_position(self, board):
         # Analyze board and return some features
-        features = {}
-        features['material_advantage'] = self.calculate_material_advantage(board)
+        features = {'material_advantage': self.calculate_material_advantage(board)}
         return features
     
-    def simple_move_predictor(self, features):
-    # Predict move based on simple rules
+    def simple_move_predictor(self, board, features):
+     # Predict move based on simple rules
         if features['material_advantage'] > 0:
-            return 'Consolidate position'
+            # If we have a material advantage, return a safe move (e.g., consolidate position)
+            for move in board.legal_moves:
+                if not board.gives_check(move) and not board.is_capture(move):
+                    return move.uci()
         else:
-            return 'Seek counterplay'
-    
+            # If we don't have a material advantage, return an aggressive move (e.g., seek counterplay)
+            for move in board.legal_moves:
+                if board.gives_check(move) or board.is_capture(move):
+                    return move.uci()
+        return next(iter(board.legal_moves)).uci()
+
+    def calculate_material_advantage(self, board):
+        material_values = {
+            chess.PAWN: 1,
+            chess.KNIGHT: 3,
+            chess.BISHOP: 3,
+            chess.ROOK: 5,
+            chess.QUEEN: 9,
+            chess.KING: 0  # The king's material value is not typically counted
+        }
+
+        material_advantage = 0
+
+        for square in chess.SQUARES:
+            piece = board.piece_at(square)
+            if piece is not None:
+                value = material_values[piece.piece_type]
+                if piece.color == self.color:
+                    material_advantage += value
+                else:
+                    material_advantage -= value
+
+        return material_advantage
+ 
     def get_score_from_move_analysis(self,board):
         try:
             info = self.engine.analyse(board, chess.engine.Limit(depth=20))
@@ -321,22 +385,15 @@ class MyAgent(Player):
         return info["score"]
 
     def generate_move_for_board(self,board,seconds_left):
-    
-        # board.turn = self.color
         if board.is_checkmate():
             move = list(board.legal_moves)[0]
-        else:
-            # time_per_board = max(seconds_left / max(len(self.possible_boards), 1), 0.01)  # Safeguard against too low values
-            # if time_per_board > 10:
-            #     time_per_board = 0.1
-            time_per_board = max(10 / max(len(self.possible_boards), 1), 0.5)  # Safeguard against too low values
+        else:  # Safeguard against too low values
             try:
                 move = self.engine.play(board, chess.engine.Limit(time=0.1)).move
             except Exception as e:
-                print(e)
+                # print(e)
                 return  list(board.legal_moves)[0]
 
-    
         return move
     
     def calculate_best_move(self,move_actions, seconds_left):
@@ -348,17 +405,15 @@ class MyAgent(Player):
         if not self.possible_boards:
             return random.choice(move_actions)
 
-        count = 0
+        
         for board in self.possible_boards:
-            count +=1
-            if count > 9:
+            if(seconds_left<10):
                 break
 
             possibleBoard = chess.Board(board)
             move = self.generate_move_for_board(possibleBoard, seconds_left)
 
-            # if(seconds_left<10):
-            #     break
+            
 
             if move in move_actions:
                 possibleBoard.push(move)
@@ -475,10 +530,12 @@ class MyAgent(Player):
         # Update to only keep the states that are consistent with the move outcome
         if len(new_possible_boards)==0:
             print("something has gone worng after making a move bih")
+        else:
+            self.possible_boards = new_possible_boards
 
-        expanded_new_possible_boards = self.generate_possible_board_for_all_possible_boards(new_possible_boards)
-        self.possible_boards = expanded_new_possible_boards
-        print("Num of possible boards after making move: ", len(self.possible_boards))
+        # expanded_new_possible_boards = self.generate_possible_board_for_all_possible_boards(new_possible_boards)
+        # self.possible_boards = expanded_new_possible_boards
+        # print("Num of possible boards after making move: ", len(self.possible_boards))
         
     def is_opponent_piece(self, move, board):
         from_square = move.from_square
@@ -506,6 +563,7 @@ class MyAgent(Player):
             if possible_king_position is not None:
                 self.add_possible_king_position_from_board(possible_king_position)
             else:
+                continue
                 print("nop enemy king on this board I guess I ate them lol") #TODO: remove this board since it can't possibly be a board if we are still in game play
             possible_boards.add(new_board.fen())
         
